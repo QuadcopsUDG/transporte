@@ -1,134 +1,98 @@
-import time
-from typing import Any, Callable, Iterable, Mapping
+# A trabajar con quad.ttt
+
 import sim
 import numpy as np
 import cv2
-import threading
-import logging
-import random
-import math
+import slam
 
-logging.basicConfig(level=logging.DEBUG)
 
-PUERTO_SIMULACION = 19999
+def connect(port):
+    sim.simxFinish(-1)  # cerrar conexiones
+    clientID = sim.simxStart('127.0.0.1', port, True, True, 2000, 5)  # conectarse
+    if clientID == 0:
+        print("Conectado a: ", port)
+    else:
+        print("No se pudo conectar")
+    return clientID
 
-def mover_dron(id_cliente: int, referencia_objetivo: int, pos: list):
-    # Mover el objetivo a nueva, posicion
-    sim.simxSetObjectPosition(
-        id_cliente,
-        referencia_objetivo,
-        -1,
-        pos,
-        sim.simx_opmode_oneshot
-    )
 
-def mover_para_enfocar(id_cliente: int, referencia_objetivo: int):
-    _, pos = sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
-    pos[2] += 20
-    mover_dron(id_cliente, referencia_objetivo, pos)
-    _, pos = sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
-    pos[2] -= 20
-    mover_dron(id_cliente, referencia_objetivo, pos)
+def main():
+    key_W = ord('w')
+    key_A = ord('a')
+    key_S = ord('s')
+    key_D = ord('d')
+    key_K = ord('k')
+    key_I = ord('i')
+    key_J = ord('j')
+    key_L = ord('l')
 
-def esbos_tresesenta(id_cliente: int, referencia_objetivo: int):
-    # Angulos de Euler
-    # [
-    #   roll
-    #   pitch
-    #   yaw (el unico que necesitamos mover)
-    # ]
+    positional_movement_keys = [key_W, key_A, key_S, key_D, key_I, key_K]
+    rotation_movement_keys = [key_J, key_L]
+    movement_keys = [*positional_movement_keys, *rotation_movement_keys]
 
-    # iniciar "streaming" de orientación del dron
-    _, pos = sim.simxGetObjectOrientation(
-        id_cliente,
-        referencia_objetivo,
-        -1,
-        sim.simx_opmode_streaming
-    )
-
-    rotacion_inicial = pos[2]
-    pos[2] += 0.1
-
-    while math.ceil(abs(pos[2])) > rotacion_inicial and sim.simxGetConnectionId(id_cliente) != -1:
-        _, pos = sim.simxGetObjectOrientation(
-            id_cliente,
-            referencia_objetivo,
-            -1,
-            sim.simx_opmode_buffer
-        )
-
-        pos[2] += 0.1
-        print(pos[2])
-
-        # aqui deberiamos hacer la rotacion con los angulos de Euler. Kemeyo
-        sim.simxSetObjectOrientation(
-            id_cliente,
-            referencia_objetivo,
-            -1,
-            pos,
-            sim.simx_opmode_oneshot
-        )
-
-        time.sleep(0.3)
-
-def hilo_dron(id_cliente: int, referencia_objetivo: int, referencia_dron: int):
-    """
-    En este target se manejan todos los movimientos del dron y acá
-    """
-    # mover_para_enfocar(id_cliente, referencia_objetivo)
-    # sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
-    esbos_tresesenta(id_cliente, referencia_objetivo)
-
-def correr_camara(id_cliente: int, referencia_camara: int) -> None:
-    logging.debug("Corriendo el hilo de la camara")
-    err, resolution, image = sim.simxGetVisionSensorImage(id_cliente, referencia_camara, 0, sim.simx_opmode_streaming)
-    while (sim.simxGetConnectionId(id_cliente) != -1):
-        err, resolution, image = sim.simxGetVisionSensorImage(id_cliente, referencia_camara, 0, sim.simx_opmode_buffer)
+    clientID = connect(19999)
+    # QUAD
+    returnCode, target = sim.simxGetObjectHandle(clientID, '/target', sim.simx_opmode_blocking)
+    # returnCode, target_pos = sim.simxGetObjectPosition(clientID, target, -1, sim.simx_opmode_blocking)
+    # print(target_pos)
+    # sim.simxSetObjectPosition(clientID, target, -1, [-.3, .5, .4], sim.simx_opmode_oneshot)
+    # Camara
+    ret, camara = sim.simxGetObjectHandle(clientID, 'Vision_sensor', sim.simx_opmode_blocking)
+    sim.simxGetVisionSensorImage(clientID, camara, 0, sim.simx_opmode_streaming)
+    while sim.simxGetConnectionId(clientID) != -1:
+        err, resolution, image = sim.simxGetVisionSensorImage(clientID, camara, 0, sim.simx_opmode_buffer)
         if err == sim.simx_return_ok:
             img = np.array(image, dtype=np.uint8)
             img.resize([resolution[1], resolution[0], 3])
             img = cv2.flip(img, 1)
             cv2.imshow('image', img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            slam.generate_SLAM(img)
+            key_pressed = cv2.waitKey(1) & 0xFF
+            if key_pressed == ord('q'):
                 break
+            elif key_pressed in movement_keys:
+                returnCode, target_pos = sim.simxGetObjectPosition(clientID, target, -1, sim.simx_opmode_blocking)
+                returnCode, target_rotation = sim.simxGetObjectOrientation(clientID, target, -1, sim.simx_opmode_blocking)
+                target_pos = np.array(target_pos)
+                target_rotation = np.array(target_rotation)
+                if key_pressed == key_W:
+                    movement_vector = np.array([0.1, 0, 0])
+                elif key_pressed == key_A:
+                    movement_vector = np.array([0.0, 0.1, 0])
+                elif key_pressed == key_S:
+                    movement_vector = np.array([-0.1, 0, 0])
+                elif key_pressed == key_D:
+                    movement_vector = np.array([0, -0.1, 0])
+                elif key_pressed == key_I:
+                    movement_vector = np.array([0, 0, 0.1])
+                elif key_pressed == key_K:
+                    movement_vector = np.array([0, 0, -0.1])
+                elif key_pressed == key_J:
+                    movement_vector = np.array([0, 0, 0.5])
+                else:
+                    movement_vector = np.array([0, 0, -0.5])
+                if key_pressed in positional_movement_keys:
+                    sim.simxSetObjectPosition(
+                        clientID,
+                        target,
+                        sim.sim_handle_parent,
+                        target_pos + movement_vector,
+                        sim.simx_opmode_oneshot
+                    )
+                else:
+                    sim.simxSetObjectOrientation(
+                        clientID,
+                        target,
+                        -1,
+                        target_rotation + movement_vector,
+                        sim.simx_opmode_oneshot
+                    )
         elif err == sim.simx_return_novalue_flag:
             pass
         else:
-            logging.error(err)
-
+            print(err)
     cv2.destroyAllWindows()
 
-def conectar_a_coppelia(puerto):
-    logging.debug("Conectando a Coppelia")
-    host = "127.0.0.1"
-    sim.simxFinish(-1) # cerrar conexiones
-    id_cliente = sim.simxStart('127.0.0.1', puerto, True, True, 2000, 5)
 
-    if id_cliente == 0:
-        logging.info("Conectado a {}:{}".format(host, puerto))
-    else:
-        raise Exception("No se pudo conectar a {}:{}".format(host, puerto))
-
-    return id_cliente
-
-def main():
-    id_cliente = conectar_a_coppelia(19999)
-    _, target_dron = sim.simxGetObjectHandle(id_cliente, 'Quadcopter_target', sim.simx_opmode_blocking)
-    _, referencia_dron = sim.simxGetObjectHandle(id_cliente, 'Quadcopter', sim.simx_opmode_blocking)
-    # _, posicion_dron = sim.simxGetObjectPosition(clientID, target, -1, sim.simx_opmode_blocking)
-
-    # Camara
-    _, camara = sim.simxGetObjectHandle(id_cliente, 'camara', sim.simx_opmode_blocking)
-
-    logging.debug("Inicializando hilo de la cámara")
-    hilo_camara = threading.Thread(target = correr_camara, args = (id_cliente, camara))
-    logging.debug("Corriendo hilo de la cámara")
-    hilo_camara.start()
-
-    logging.debug("Inicializando hilo para mover el bote")
-    hilo_mover_el_bote = threading.Thread(target = hilo_dron, args = (id_cliente, target_dron, referencia_dron))
-    logging.debug("Moviendo el bote...")
-    hilo_mover_el_bote.start()
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
