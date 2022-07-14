@@ -39,33 +39,48 @@ def esbos_tresesenta(id_cliente: int, referencia_objetivo: int):
     # ]
 
     # iniciar "streaming" de orientación del dron
-    _, pos = sim.simxGetObjectOrientation(
+    sim.simxGetObjectOrientation(
         id_cliente,
         referencia_objetivo,
         -1,
         sim.simx_opmode_streaming
     )
 
-    rotacion_inicial = pos[2]
-    pos[2] += 0.1
 
-    while math.ceil(abs(pos[2])) > rotacion_inicial and sim.simxGetConnectionId(id_cliente) != -1:
-        _, pos = sim.simxGetObjectOrientation(
+    # las orientaciones llegan a ser PI como máximo, luego pasa a -2.999, -1 y de vuelta a 0
+    # este acumulador nos permite _no_ rompernos la cabeza para saber si ya hizo una rotación completa
+    rotacion_total = 0
+
+    # dar una vuelta de 360°
+    while sim.simxGetConnectionId(id_cliente) != -1:
+        # orientacion = rotaciones en [X, Y, Z]
+        _, orientacion = sim.simxGetObjectOrientation(
             id_cliente,
             referencia_objetivo,
             -1,
             sim.simx_opmode_buffer
         )
 
-        pos[2] += 0.1
-        print(pos[2])
+        rotacion_total += 0.1
 
-        # aqui deberiamos hacer la rotacion con los angulos de Euler. Kemeyo
+        if rotacion_total >= math.tau:
+            orientacion[2] = 0
+            sim.simxSetObjectOrientation(
+                id_cliente,
+                referencia_objetivo,
+                -1,
+                orientacion,
+                sim.simx_opmode_oneshot
+            )
+            break
+
+        orientacion[2] += 0.1
+
         sim.simxSetObjectOrientation(
             id_cliente,
             referencia_objetivo,
             -1,
-            pos,
+            orientacion,
             sim.simx_opmode_oneshot
         )
 
@@ -90,6 +105,8 @@ def correr_camara(id_cliente: int, referencia_camara: int) -> None:
             img = cv2.flip(img, 1)
             cv2.imshow('image', img)
             if cv2.waitKey(1) & 0xFF == ord('q'):
+                # sin cámara no tiene sentido vivir...
+                sim.simxFinish(id_cliente)
                 break
         elif err == sim.simx_return_novalue_flag:
             pass
