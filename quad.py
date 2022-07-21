@@ -1,3 +1,5 @@
+from collections import namedtuple
+from json import load
 import time
 from typing import Any, Callable, Iterable, Mapping
 import sim
@@ -10,7 +12,15 @@ import math
 
 logging.basicConfig(level=logging.DEBUG)
 
-PUERTO_SIMULACION = 19999
+def loadConfig():
+    """
+    Lee archivo json y retorna sus valores en un objeto serializable (NO DICCIONARIO)
+    """
+    with open("config.json") as file:
+        dictionary = load(file)
+        return namedtuple("Config", dictionary.keys())(*dictionary.values())
+
+config = loadConfig()
 
 def mover_dron(id_cliente: int, referencia_objetivo: int, pos: list):
     # Mover el objetivo a nueva, posicion
@@ -30,7 +40,7 @@ def mover_para_enfocar(id_cliente: int, referencia_objetivo: int):
     pos[2] -= 20
     mover_dron(id_cliente, referencia_objetivo, pos)
 
-def esbos_tresesenta(id_cliente: int, referencia_objetivo: int):
+def full_360_degree_spin(id_cliente: int, referencia_objetivo: int):
     # Angulos de Euler
     # [
     #   roll
@@ -39,33 +49,35 @@ def esbos_tresesenta(id_cliente: int, referencia_objetivo: int):
     # ]
 
     # iniciar "streaming" de orientación del dron
-    _, pos = sim.simxGetObjectOrientation(
+    _, [roll, pitch, yaw] = sim.simxGetObjectOrientation(
         id_cliente,
         referencia_objetivo,
         -1,
         sim.simx_opmode_streaming
     )
 
-    rotacion_inicial = pos[2]
-    pos[2] += 0.1
+    yaw += config.rotation_speed
+    negative = False
 
-    while math.ceil(abs(pos[2])) > rotacion_inicial and sim.simxGetConnectionId(id_cliente) != -1:
-        _, pos = sim.simxGetObjectOrientation(
+    while not negative or yaw < 0:
+        _, [roll, pitch, yaw] = sim.simxGetObjectOrientation(
             id_cliente,
             referencia_objetivo,
             -1,
             sim.simx_opmode_buffer
         )
 
-        pos[2] += 0.1
-        print(pos[2])
+        yaw += config.rotation_speed
+        if yaw < 0:
+            negative = True
+        print(yaw)
 
         # aqui deberiamos hacer la rotacion con los angulos de Euler. Kemeyo
         sim.simxSetObjectOrientation(
             id_cliente,
             referencia_objetivo,
             -1,
-            pos,
+            [roll, pitch, yaw],
             sim.simx_opmode_oneshot
         )
 
@@ -77,7 +89,7 @@ def hilo_dron(id_cliente: int, referencia_objetivo: int, referencia_dron: int):
     """
     # mover_para_enfocar(id_cliente, referencia_objetivo)
     # sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
-    esbos_tresesenta(id_cliente, referencia_objetivo)
+    full_360_degree_spin(id_cliente, referencia_objetivo)
 
 def correr_camara(id_cliente: int, referencia_camara: int) -> None:
     logging.debug("Corriendo el hilo de la camara")
@@ -112,7 +124,7 @@ def conectar_a_coppelia(puerto):
     return id_cliente
 
 def main():
-    id_cliente = conectar_a_coppelia(19999)
+    id_cliente = conectar_a_coppelia(config.simulation_port)
     _, target_dron = sim.simxGetObjectHandle(id_cliente, 'Quadcopter_target', sim.simx_opmode_blocking)
     _, referencia_dron = sim.simxGetObjectHandle(id_cliente, 'Quadcopter', sim.simx_opmode_blocking)
     # _, posicion_dron = sim.simxGetObjectPosition(clientID, target, -1, sim.simx_opmode_blocking)

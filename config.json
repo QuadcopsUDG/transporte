@@ -1,0 +1,6 @@
+{
+    "simulation_port": 19999,
+    "max_angle": 360,
+    "rotation_speed": 0.3,
+    "translation_speed": 2
+}
