@@ -1,34 +1,70 @@
 import time
-from typing import Any, Callable, Iterable, Mapping
 import sim
 import numpy as np
 import cv2
 import threading
 import logging
-import random
 import math
 
 logging.basicConfig(level=logging.DEBUG)
 
 PUERTO_SIMULACION = 19999
 
-def mover_dron(id_cliente: int, referencia_objetivo: int, pos: list):
-    # Mover el objetivo a nueva, posicion
+def mover_dron(id_cliente, referencia_dron, referencia_objetivo, transformacion):
+    """
+    Mover el objetivo a una nueva posicion, transformación relativa
+    [delta x, delta y, delta z] EN METROS
+    """
+    # posición DEL objetivo del dron. El dron lo seguirá
+    _, posicion_inicial_absoluta = sim.simxGetObjectPosition(
+        id_cliente,
+        referencia_objetivo,
+        -1,
+        sim.simx_opmode_buffer
+    )
+
+    # posición a la que se busca que vaya el dron
+    posicion_objetivo = [
+        transformacion[i] + posicion_inicial_absoluta[i]
+        for i in range(len(posicion_inicial_absoluta))
+    ]
+
+    logging.debug(f"Moviendo desde {str(posicion_inicial_absoluta)}")
+    logging.debug(f"hacia -------> {str(posicion_objetivo)}")
+
+    # Mover el objetivo a una nueva posicion
     sim.simxSetObjectPosition(
         id_cliente,
         referencia_objetivo,
         -1,
-        pos,
+        posicion_objetivo,
         sim.simx_opmode_oneshot
     )
 
-def mover_para_enfocar(id_cliente: int, referencia_objetivo: int):
-    _, pos = sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
-    pos[2] += 20
-    mover_dron(id_cliente, referencia_objetivo, pos)
-    _, pos = sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
-    pos[2] -= 20
-    mover_dron(id_cliente, referencia_objetivo, pos)
+    # Esperar a que el dron alcance el objetivo
+    while sim.simxGetConnectionId(id_cliente) != -1:
+        _, posicion_dron = sim.simxGetObjectPosition(
+            id_cliente,
+            referencia_dron,
+            -1,
+            sim.simx_opmode_blocking
+        )
+
+        # comparar posiciones del objetivo y del dron
+        diferencia_total = sum(
+            abs(posicion_dron[i] - posicion_objetivo[i])
+            for i in range(len(posicion_objetivo))
+        )
+
+        if diferencia_total <= 0.007: # 7 milímetros de tolerancia
+            break
+
+        # revisar cada medio segundo
+        time.sleep(0.5)
+
+def mover_para_enfocar(id_cliente: int, referencia_dron: int, referencia_objetivo: int):
+    mover_dron(id_cliente, referencia_dron, referencia_objetivo, [0, 0, 0.5])
+    mover_dron(id_cliente, referencia_dron, referencia_objetivo, [0, 0, -0.5])
 
 def esbos_tresesenta(id_cliente: int, referencia_objetivo: int):
     # Angulos de Euler
@@ -84,14 +120,13 @@ def esbos_tresesenta(id_cliente: int, referencia_objetivo: int):
             sim.simx_opmode_oneshot
         )
 
-        time.sleep(0.3)
+        time.sleep(0.4)
 
-def hilo_dron(id_cliente: int, referencia_objetivo: int, referencia_dron: int):
+def hilo_dron(id_cliente: int, referencia_dron: int, referencia_objetivo: int):
     """
     En este target se manejan todos los movimientos del dron y acá
     """
-    # mover_para_enfocar(id_cliente, referencia_objetivo)
-    # sim.simxGetObjectPosition(id_cliente, referencia_objetivo, -1, sim.simx_opmode_blocking)
+    mover_para_enfocar(id_cliente, referencia_dron, referencia_objetivo)
     esbos_tresesenta(id_cliente, referencia_objetivo)
 
 def correr_camara(id_cliente: int, referencia_camara: int) -> None:
@@ -130,9 +165,17 @@ def conectar_a_coppelia(puerto):
 
 def main():
     id_cliente = conectar_a_coppelia(19999)
-    _, target_dron = sim.simxGetObjectHandle(id_cliente, 'Quadcopter_target', sim.simx_opmode_blocking)
     _, referencia_dron = sim.simxGetObjectHandle(id_cliente, 'Quadcopter', sim.simx_opmode_blocking)
-    # _, posicion_dron = sim.simxGetObjectPosition(clientID, target, -1, sim.simx_opmode_blocking)
+    _, referencia_objetivo = sim.simxGetObjectHandle(id_cliente, 'Quadcopter_target', sim.simx_opmode_blocking)
+
+    # posición DEL objetivo del dron. El dron lo seguirá
+    _, posicion_inicial_absoluta = sim.simxGetObjectPosition(
+        id_cliente,
+        referencia_objetivo,
+        -1,
+        sim.simx_opmode_streaming
+    )
+    logging.debug(f"Posicion inicial {str(referencia_objetivo)} {str(posicion_inicial_absoluta)}")
 
     # Camara
     _, camara = sim.simxGetObjectHandle(id_cliente, 'camara', sim.simx_opmode_blocking)
@@ -143,7 +186,10 @@ def main():
     hilo_camara.start()
 
     logging.debug("Inicializando hilo para mover el bote")
-    hilo_mover_el_bote = threading.Thread(target = hilo_dron, args = (id_cliente, target_dron, referencia_dron))
+    hilo_mover_el_bote = threading.Thread(
+        target = hilo_dron,
+        args = (id_cliente, referencia_dron, referencia_objetivo)
+    )
     logging.debug("Moviendo el bote...")
     hilo_mover_el_bote.start()
 
